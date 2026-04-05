@@ -1,5 +1,5 @@
 // api/quote.js
-// 适配 ES Module 规范，彻底修复 Object.keys 拼写错误及导入兼容性
+// 适配 ES Module 规范，采用最高兼容性的模块解包逻辑
 import yahooFinance from 'yahoo-finance2';
 
 export default async function handler(req, res) {
@@ -18,29 +18,26 @@ export default async function handler(req, res) {
     symbol = symbol.replace('US.', '');
 
     try {
-        console.log(`[Vercel API] 尝试获取数据: ${symbol}`);
-        
         /**
-         * 🛠️ 深度兼容性探测 (修正版)：
-         * 解决 Vercel 编译环境下 CommonJS 与 ESM 混用的导入问题
+         * 🛠️ 终极模块解包逻辑：
+         * 针对 Vercel/Node ESM 环境下可能出现的各种嵌套结构进行清理
          */
         let yf = yahooFinance;
-        
-        // 探测逻辑：如果当前对象没有 quote，尝试进入 .default 层
-        if (yf && !yf.quote && yf.default) {
-            yf = yf.default;
-        }
-        
-        // 二次探测：有些打包工具会嵌套两层 .default
-        if (yf && !yf.quote && yf.default) {
-            yf = yf.default;
+
+        // 逐层检查并剥离 .default
+        for (let i = 0; i < 3; i++) {
+            if (yf && !yf.quote && yf.default) {
+                yf = yf.default;
+            }
         }
 
-        // 最终检查 (此处已修正 JSON.keys -> Object.keys)
+        // 如果还是找不到，尝试检查它是否被打包成了具有特定属性的对象
         if (!yf || typeof yf.quote !== 'function') {
-            console.error("[API Error] 无法识别模块结构，可用键名为:", Object.keys(yf || {}));
-            throw new Error("yahoo-finance2 库尚未就绪，请稍后刷新重试。");
+            console.error("[API Error] 模块探测失败。当前对象结构:", JSON.stringify(Object.keys(yf || {})));
+            throw new Error("无法初始化数据引擎。请尝试重新部署或联系支持。");
         }
+
+        console.log(`[Vercel API] 引擎就绪，正在抓取: ${symbol}`);
 
         // 并发获取实时行情和历史数据
         const [quote, history] = await Promise.all([
@@ -64,7 +61,7 @@ export default async function handler(req, res) {
             dayOpen: quote.regularMarketOpen,
             dayHigh: quote.regularMarketDayHigh,
             dayLow: quote.regularMarketDayLow,
-            source: 'Vercel Serverless (Yahoo)',
+            source: 'Vercel Serverless (Cloud)',
             history: (history || []).map(h => ({
                 time: h.date instanceof Date ? h.date.toISOString().split('T')[0] : h.date,
                 open: h.open,
@@ -79,9 +76,13 @@ export default async function handler(req, res) {
         return res.status(200).json(formattedData);
         
     } catch (error) {
-        console.error(`[Vercel API] 错误 ${symbol}:`, error.message);
+        console.error(`[Vercel API] 严重错误 ${symbol}:`, error.message);
+        
+        // 针对没有权限的错误进行专门提示
+        const errorMsg = error.message.includes('permission') ? "无行情权限，请检查代码名" : "数据抓取失败";
+        
         return res.status(500).json({ 
-            error: "数据抓取失败", 
+            error: errorMsg, 
             details: error.message 
         });
     }
