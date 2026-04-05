@@ -1,9 +1,9 @@
 // api/quote.js
-// 采用 Vercel 推荐的 ESM 原生导入，并加入动态解析逻辑
+// 针对 Vercel Serverless 环境优化的“防死锁”导入逻辑
 import yahooFinance from 'yahoo-finance2';
 
 export default async function handler(req, res) {
-    // 1. 设置跨域头
+    // 1. 设置跨域头 (保持不变)
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
@@ -13,41 +13,60 @@ export default async function handler(req, res) {
         return;
     }
 
-    // 2. 解析股票代码
+    // 2. 解析代码
     let symbol = (req.query.code || 'TSLA').replace('US.', '');
 
     try {
-        console.log(`[Vercel API] 正在尝试解析引擎...`);
+        console.log(`[Vercel API] 正在进行深度引擎探测...`);
 
         /**
-         * 🛠️ 核心修复逻辑：
-         * 针对 Vercel 环境下 yahoo-finance2 导入结构不确定的问题进行“三级跳”探测
+         * 🛠️ 终极自愈逻辑 (Vercel 专用版)：
+         * 解决 ESM 与 CommonJS 混用导致的 .default 嵌套及模块丢失问题
          */
-        let yf = yahooFinance;
+        let yf = null;
 
-        // 第一级：标准导入
-        if (!yf || (typeof yf.quote !== 'function' && yf.default)) {
-            yf = yf.default;
-        }
+        // 探测 A：尝试直接解包可能的嵌套
+        const probe = (obj) => {
+            if (!obj) return null;
+            if (typeof obj.quote === 'function') return obj;
+            if (obj.default && typeof obj.default.quote === 'function') return obj.default;
+            return null;
+        };
 
-        // 第二级：如果还是不行，说明库加载可能出了断层，尝试动态重载
-        if (!yf || typeof yf.quote !== 'function') {
+        yf = probe(yahooFinance);
+
+        // 探测 B：如果 A 失败，尝试动态重新加载
+        if (!yf) {
             try {
-                const dynamicImport = await import('yahoo-finance2');
-                yf = dynamicImport.default || dynamicImport;
+                const dynamic = await import('yahoo-finance2');
+                yf = probe(dynamic);
             } catch (e) {
-                console.error("动态加载失败:", e.message);
+                console.error("动态加载尝试失败:", e.message);
             }
         }
 
-        // 最终检查
+        // 3. 最终拦截与诊断
         if (!yf || typeof yf.quote !== 'function') {
-            throw new Error("数据引擎初始化失败：找不到核心函数。请检查依赖是否安装。");
+            // 如果走到这里，说明库的加载彻底失败，返回诊断 JSON 以便排查
+            const debugInfo = {
+                typeof_import: typeof yahooFinance,
+                has_default: !!(yahooFinance && yahooFinance.default),
+                available_keys: yahooFinance ? Object.keys(yahooFinance).slice(0, 10) : 'none'
+            };
+            
+            console.error("[API ERROR] 引擎失效，诊断信息:", debugInfo);
+            
+            return res.status(500).json({ 
+                error: "接口响应异常", 
+                details: "数据引擎初始化失败：找不到核心函数。这通常是 Vercel 依赖编译错误。",
+                diagnostics: debugInfo,
+                suggestion: "请在终端执行 'npm install yahoo-finance2@latest' 后再次推送，并在 Vercel 控制台选择 'Clean Cache Redeploy'。"
+            });
         }
 
-        console.log(`[Vercel API] 引擎就绪，正在抓取: ${symbol}`);
+        console.log(`[Vercel API] 引擎已唤醒，正在抓取: ${symbol}`);
 
-        // 3. 并发获取实时报价和历史数据
+        // 4. 执行数据抓取
         const [quote, history] = await Promise.all([
             yf.quote(symbol),
             yf.historical(symbol, { 
@@ -58,7 +77,7 @@ export default async function handler(req, res) {
 
         if (!quote) throw new Error(`未找到代码 ${symbol} 的数据。`);
 
-        // 4. 格式化并返回
+        // 5. 格式化并返回
         const formattedData = {
             symbol: symbol,
             price: quote.regularMarketPrice,
@@ -84,9 +103,8 @@ export default async function handler(req, res) {
     } catch (error) {
         console.error(`[Vercel API] 捕获异常:`, error.message);
         return res.status(500).json({ 
-            error: "接口响应异常", 
-            details: error.message,
-            suggestion: "请确保 package.json 中已包含 'yahoo-finance2'"
+            error: "数据抓取异常", 
+            details: error.message 
         });
     }
 }
