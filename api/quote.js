@@ -1,5 +1,5 @@
 // api/quote.js
-// 适配 ES Module 规范，并解决 Vercel 环境下深度嵌套的导入问题
+// 适配 ES Module 规范，彻底修复 Object.keys 拼写错误及导入兼容性
 import yahooFinance from 'yahoo-finance2';
 
 export default async function handler(req, res) {
@@ -21,27 +21,27 @@ export default async function handler(req, res) {
         console.log(`[Vercel API] 尝试获取数据: ${symbol}`);
         
         /**
-         * 🛠️ 深度兼容性探测：
-         * 某些版本的打包工具会将 ESM 模块嵌套多层 .default。
-         * 我们通过一个循环来解开这些嵌套，直到找到真正的功能对象。
+         * 🛠️ 深度兼容性探测 (修正版)：
+         * 解决 Vercel 编译环境下 CommonJS 与 ESM 混用的导入问题
          */
         let yf = yahooFinance;
-        // 如果 yf 本身没有 quote，但有 default，就深入一层
-        if (!yf.quote && yf.default) {
+        
+        // 探测逻辑：如果当前对象没有 quote，尝试进入 .default 层
+        if (yf && !yf.quote && yf.default) {
             yf = yf.default;
         }
-        // 二次防御：如果还是没有，尝试检查是否有更深的嵌套
-        if (!yf.quote && yf.default) {
+        
+        // 二次探测：有些打包工具会嵌套两层 .default
+        if (yf && !yf.quote && yf.default) {
             yf = yf.default;
         }
 
-        // 最终检查
-        if (typeof yf.quote !== 'function') {
-            console.error("[API Error] 无法识别 yahooFinance 结构:", JSON.keys(yahooFinance));
-            throw new Error("yahoo-finance2 库初始化失败，请检查依赖版本。");
+        // 最终检查 (此处已修正 JSON.keys -> Object.keys)
+        if (!yf || typeof yf.quote !== 'function') {
+            console.error("[API Error] 无法识别模块结构，可用键名为:", Object.keys(yf || {}));
+            throw new Error("yahoo-finance2 库尚未就绪，请稍后刷新重试。");
         }
 
-        // 使用解出的 yf 对象进行查询
         // 并发获取实时行情和历史数据
         const [quote, history] = await Promise.all([
             yf.quote(symbol),
@@ -79,9 +79,9 @@ export default async function handler(req, res) {
         return res.status(200).json(formattedData);
         
     } catch (error) {
-        console.error(`[Vercel API] 失败 ${symbol}:`, error.message);
+        console.error(`[Vercel API] 错误 ${symbol}:`, error.message);
         return res.status(500).json({ 
-            error: "无法获取股票数据", 
+            error: "数据抓取失败", 
             details: error.message 
         });
     }
