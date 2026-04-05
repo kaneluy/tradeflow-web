@@ -68,8 +68,8 @@ class ErrorBoundary extends React.Component {
       return (
         <div className="flex flex-col items-center justify-center h-screen bg-slate-950 text-white p-4 font-sans text-center">
           <ShieldAlert className="w-16 h-16 text-red-500 mb-4" />
-          <h1 className="text-2xl font-black mb-4 text-red-500 tracking-tighter">TERMINAL ERROR</h1>
-          <pre className="bg-slate-900 p-6 rounded-2xl text-xs overflow-auto max-w-full text-rose-300 border border-rose-900/30 font-mono mb-6">
+          <h1 className="text-2xl font-black mb-4 text-red-500 tracking-tighter">内核启动失败</h1>
+          <pre className="bg-slate-900 p-6 rounded-2xl text-xs overflow-auto max-w-full text-rose-300 border border-rose-900/30 font-mono mb-6 text-left">
             {this.state.error ? String(this.state.error) : "Kernel Panic"}
           </pre>
           <button onClick={() => window.location.reload()} className="px-8 py-3 bg-blue-600 text-white rounded-xl shadow-xl font-bold hover:bg-blue-500 transition-all active:scale-95">重启终端</button>
@@ -85,49 +85,55 @@ class ErrorBoundary extends React.Component {
 // ==========================================
 
 /**
- * 🛠️ 智能 AI 通信引擎 (V14.5 增强版)
- * 解决 404/403 报错，并支持网络环境自动适配
+ * 🛠️ 智能 AI 通信引擎 (V14.6 诊断增强版)
+ * 解决浏览器直接访问 API 根目录 404 但实际接口需路径对齐的问题
  */
-const callGeminiAPI = async (prompt, userKey, backendUrl = "") => {
+const callGeminiAPI = async (prompt, userKey) => {
   const cleanKey = (userKey || "").trim();
   if (!cleanKey) return "⚠️ 请点击左下角设置按钮，填入您的 Gemini API Key。";
   
-  // 备选方案列表
-  const apiConfigs = [
-    { url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}` },
-    { url: `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${cleanKey}` }
+  // 智能路径轮询：尝试不同的版本路径
+  const apiPaths = [
+    "v1beta",
+    "v1"
   ];
 
-  let lastError = "";
+  let diagnosticLog = [];
 
-  for (const config of apiConfigs) {
+  for (const path of apiPaths) {
     try {
-      const response = await fetch(config.url, {
+      const url = `https://generativelanguage.googleapis.com/${path}/models/gemini-1.5-flash:generateContent?key=${cleanKey}`;
+      
+      const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
       });
       
-      if (response.status === 403) return "AI 访问被拒绝 (403)。Key 错误或所在 IP 区域不支持（如中国）。建议部署后使用云端访问。";
-      if (response.status === 404) {
-          lastError = "404";
-          continue; // 尝试下一个配置
-      }
-      if (response.status === 429) return "请求过于频繁 (429)。请 60 秒后再试。";
+      // 捕获权限/配额错误
+      if (response.status === 403) return "AI 访问被拒绝 (403)。\n可能原因：1. API Key 错误；2. 账号区域受限。";
+      if (response.status === 429) return "请求过于频繁 (429)。请等待 60 秒后再试。";
       
+      // 如果 404，说明当前路径在该区域不可用，记录并继续尝试下一路径
+      if (response.status === 404) {
+          diagnosticLog.push(`${path}:404`);
+          continue;
+      }
+
       if (!response.ok) {
-          lastError = `HTTP ${response.status}`;
+          diagnosticLog.push(`${path}:${response.status}`);
           continue;
       }
       
       const data = await response.json();
-      return data.candidates?.[0]?.content?.parts?.[0]?.text || "AI 引擎无响应。";
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || "AI 引擎已响应但未生成文本。";
+
     } catch (e) {
-      lastError = "网络拦截/超时";
+      diagnosticLog.push(`网络异常`);
     }
   }
 
-  return `AI 服务响应失败 (${lastError})。可能是由于本地网络无法直连 Google 服务器。请确保已开启海外全局代理，或在部署后的 Vercel 环境下测试。`;
+  return `AI 服务初始化失败。\n调试记录: [${diagnosticLog.join(', ')}]\n\n建议方案：\n1. 检查 API Key 是否复制完整；\n2. 确保已开启海外全局代理；\n3. 尝试在手机 5G 网络下刷新页面。`;
 };
 
 const calculateIndicators = (data) => {
@@ -205,13 +211,13 @@ const SettingsModal = ({ onClose, isDarkMode, currentUrl, currentKey, onSave }) 
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-in fade-in">
             <div className={`w-[400px] rounded-3xl p-8 border ${isDarkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-gray-200 text-gray-900 shadow-2xl'}`}>
                 <div className="flex justify-between items-center mb-8">
-                    <h3 className="text-xl font-black flex items-center gap-2"><Settings className="text-blue-500"/> 系统设置</h3>
+                    <h3 className="text-xl font-black flex items-center gap-2"><Settings className="text-blue-500"/> 终端配置</h3>
                     <button onClick={onClose} className="p-2 hover:bg-gray-500/10 rounded-full transition-all"><X/></button>
                 </div>
                 <div className="space-y-6">
                     <div>
                         <label className="block text-[10px] font-black uppercase tracking-widest opacity-40 mb-2">后端服务器地址</label>
-                        <input value={url} onChange={e=>setUrl(e.target.value)} className={`w-full p-4 rounded-2xl border outline-none ${isDarkMode ? 'bg-slate-950 border-slate-700 text-white' : 'bg-gray-100 text-gray-900'}`} placeholder="例如: https://your-app.vercel.app" />
+                        <input value={url} onChange={e=>setUrl(e.target.value)} className={`w-full p-4 rounded-2xl border outline-none ${isDarkMode ? 'bg-slate-950 border-slate-700 text-white' : 'bg-gray-100 text-gray-900'}`} placeholder="保持为空或填写 Vercel 域名" />
                     </div>
                     <div>
                         <label className="block text-[10px] font-black uppercase tracking-widest opacity-40 mb-2">Gemini API Key</label>
@@ -258,12 +264,6 @@ const StockDashboard = () => {
 
   const currentStock = marketData[selectedSymbol] || marketData['US.TSLA'];
 
-  // 持久化存储
-  useEffect(() => {
-    localStorage.setItem('tf_backend_url', backendUrl);
-    localStorage.setItem('tf_gemini_key', geminiKey);
-  }, [backendUrl, geminiKey]);
-
   // 数据同步循环
   useEffect(() => {
     let intervalId;
@@ -282,7 +282,7 @@ const StockDashboard = () => {
                 const trend = calculateTrendAnalysis(history);
                 return { ...prev, [selectedSymbol]: { ...stock, price: res.price, change: res.changePercent, stopLoss: risk.stopLoss, targetPrice: risk.targetPrice, longTermTrend: trend, data: history, cap: res.cap || stock.cap || '---', pe: res.pe || stock.pe || '---', beta: res.beta || stock.beta || '---' } };
             });
-        } catch (e) { console.warn("Sync error"); }
+        } catch (e) { console.warn("数据同步暂缓"); }
     };
     if (isRealTime) { fetchLoop(); intervalId = setInterval(fetchLoop, 5000); }
     return () => clearInterval(intervalId);
@@ -295,24 +295,24 @@ const StockDashboard = () => {
       let prompt = "";
       if (type === 'report') {
           setIsAiLoading(true);
-          prompt = `分析股票 ${selectedSymbol}，现价 $${currentStock.price}，趋势状态为 ${currentStock.longTermTrend?.label}。请提供简短的技术点评和止损点建议。`;
-          setAiReport(await callGeminiAPI(prompt, geminiKey, backendUrl));
+          prompt = `作为顶级操盘手，分析 ${selectedSymbol} 现价 $${currentStock.price}，其目前处于 ${currentStock.longTermTrend?.label} 趋势。请给出买卖建议和止损位，输出中文。`;
+          setAiReport(await callGeminiAPI(prompt, geminiKey));
           setIsAiLoading(false);
       } else if (type === 'scan') {
           setIsScanning(true);
-          const recent = currentStock.data.slice(-5).map(d => `收:${d.close}`).join(', ');
-          prompt = `基于最近数据 [${recent}] 扫描股票 ${selectedSymbol} 的裸K形态（如吞没、十字星等），给出极简判断。`;
-          setPriceAction(await callGeminiAPI(prompt, geminiKey, backendUrl));
+          const recent = currentStock.data.slice(-7).map(d => `收:${d.close}`).join(', ');
+          prompt = `基于最近数据 [${recent}] 扫描股票 ${selectedSymbol} 是否存在吞没或十字星等裸K形态，并预测方向。`;
+          setPriceAction(await callGeminiAPI(prompt, geminiKey));
           setIsScanning(false);
       } else if (type === 'audit') {
           setIsAuditing(true);
-          prompt = `作为价值投资者，请根据市值 ${currentStock.cap} 和市盈率 ${currentStock.pe} 审计 ${selectedSymbol} 的估值风险。`;
-          setFundamentalAudit(await callGeminiAPI(prompt, geminiKey, backendUrl));
+          prompt = `审计股票 ${selectedSymbol} 的估值风险。市值 ${currentStock.cap}，PE ${currentStock.pe}。评价其安全边际。`;
+          setFundamentalAudit(await callGeminiAPI(prompt, geminiKey));
           setIsAuditing(false);
       } else if (type === 'news') {
           setIsSummarizing(true);
-          prompt = `简要总结 ${selectedSymbol} 最近的市场情绪（看多/看空），并给出理由。`;
-          setNewsSentiment(await callGeminiAPI(prompt, geminiKey, backendUrl));
+          prompt = `总结 ${selectedSymbol} 最近的市场情绪，看多还是看空。`;
+          setNewsSentiment(await callGeminiAPI(prompt, geminiKey));
           setIsSummarizing(false);
       }
   };
@@ -331,20 +331,20 @@ const StockDashboard = () => {
       {/* 侧边栏 */}
       <aside className={`w-72 border-r flex flex-col transition-all ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-xl'}`}>
         <div className="p-8 border-b border-inherit">
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 group">
                 <div className="p-3 bg-blue-600 rounded-2xl shadow-xl shadow-blue-500/30">
                     <Activity className="w-6 h-6 text-white"/>
                 </div>
                 <div>
                     <h1 className="text-2xl font-black tracking-tighter italic">TradeFlow</h1>
-                    <p className="text-[10px] opacity-40 font-mono">QUANTUM ENGINE V13.9.1</p>
+                    <p className="text-[10px] opacity-40 font-mono">ULTIMATE V14.6</p>
                 </div>
             </div>
         </div>
 
         <div className="p-6 border-b border-inherit">
             <div className="relative">
-                <input value={tickerInput} onChange={e=>setTickerInput(e.target.value)} onKeyDown={e=>e.key==='Enter' && (setSelectedSymbol(`US.${tickerInput.toUpperCase()}`), setTickerInput(""))} placeholder="代码 (如: BABA)..." className={`w-full p-3 rounded-xl border text-sm font-bold focus:outline-none transition-all ${isDarkMode ? 'bg-slate-950 border-slate-700 text-white' : 'bg-slate-100 text-gray-900'}`}/>
+                <input value={tickerInput} onChange={e=>setTickerInput(e.target.value)} onKeyDown={e=>e.key==='Enter' && (setSelectedSymbol(`US.${tickerInput.toUpperCase()}`), setTickerInput(""))} placeholder="搜索代码 (如: BABA)..." className={`w-full p-3 rounded-xl border text-sm font-bold focus:outline-none transition-all ${isDarkMode ? 'bg-slate-950 border-slate-700 text-white' : 'bg-slate-100 text-gray-900'}`}/>
                 <PlusCircle onClick={()=>{if(tickerInput){setSelectedSymbol(`US.${tickerInput.toUpperCase()}`); setTickerInput("");}}} className="absolute right-3 top-3 w-5 h-5 text-blue-500 cursor-pointer"/>
             </div>
         </div>
@@ -369,7 +369,7 @@ const StockDashboard = () => {
 
         <div className="p-6 border-t border-inherit space-y-4">
             <button onClick={()=>setIsRealTime(!isRealTime)} className={`w-full p-4 rounded-2xl flex items-center justify-between text-xs font-black border transition-all ${isRealTime ? 'bg-green-500/10 border-green-500 text-green-500 shadow-lg' : 'bg-slate-800 border-slate-700 text-slate-500'}`}>
-                <div className="flex items-center gap-2">{isRealTime ? <Wifi className="w-4 h-4"/> : <WifiOff className="w-4 h-4"/>}<span>{isRealTime ? '实盘连接中' : '切换实盘数据'}</span></div>
+                <div className="flex items-center gap-2">{isRealTime ? <Wifi className="w-4 h-4"/> : <WifiOff className="w-4 h-4"/>}<span>{isRealTime ? '实盘连接中' : '离线演示模式'}</span></div>
                 {isRealTime && <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_#10b981]"/>}
             </button>
             <div className="flex gap-2">
@@ -386,7 +386,7 @@ const StockDashboard = () => {
                 <h2 className="text-5xl font-black tracking-tighter italic">{selectedSymbol.replace('US.', '')}</h2>
                 <div className="hidden md:flex flex-col border-l border-inherit pl-6 opacity-60">
                     <span className="text-xs font-black uppercase">{currentStock.name}</span>
-                    <span className="text-[10px] font-mono text-blue-500">美股实时行情终端</span>
+                    <span className="text-[10px] font-mono text-blue-500 tracking-widest">REALTIME ENGINE ACTIVE</span>
                 </div>
             </div>
             <div className="text-right">
@@ -438,7 +438,7 @@ const StockDashboard = () => {
 
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
                         <MetricCard label="短线建议" value="适当减仓" color="text-emerald-500" icon={Zap} isDarkMode={isDarkMode}/>
-                        <MetricCard label="中长期趋势" value={currentStock.longTermTrend?.label || '强空'} color="text-blue-500" icon={TrendingUp} isDarkMode={isDarkMode}/>
+                        <MetricCard label="趋势强度" value={currentStock.longTermTrend?.label || '强空'} color="text-blue-500" icon={TrendingUp} isDarkMode={isDarkMode}/>
                         <MetricCard label="预计压力" value={`$${currentStock.targetPrice}`} color="text-rose-500" icon={Target} isDarkMode={isDarkMode}/>
                         <MetricCard label="动态止损" value={`$${currentStock.stopLoss}`} color="text-amber-500" icon={ShieldAlert} isDarkMode={isDarkMode}/>
                     </div>
@@ -454,27 +454,27 @@ const StockDashboard = () => {
                     <div className="flex-1 space-y-8 overflow-y-auto scrollbar-hide">
                         {activeTab === 'analysis' && (
                             <div className="space-y-8 animate-in fade-in duration-500">
-                                <div className={`p-8 rounded-[40px] border relative overflow-hidden flex flex-col min-h-[380px] ${isDarkMode ? 'bg-slate-900 border-slate-800 shadow-2xl' : 'bg-white border-gray-100 shadow-xl'}`}>
+                                <div className={`p-8 rounded-[40px] border relative overflow-hidden flex flex-col min-h-[380px] shadow-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-gray-100'}`}>
                                     <div className="flex justify-between items-center mb-8 relative z-10">
                                         <div className="flex items-center gap-3"><Cpu className="text-purple-500 w-6 h-6"/><h3 className="text-xl font-black tracking-tighter">智能技术研报</h3></div>
                                         <button onClick={()=>handleAI('report')} disabled={isAiLoading} className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-2.5 rounded-full text-xs font-black flex items-center gap-2 active:scale-95 disabled:opacity-50">
                                             {isAiLoading ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4"/>} 一键生成
                                         </button>
                                     </div>
-                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap relative z-10 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{aiReport || "💡 请先在左下角设置中填入有效的 Gemini API Key。"}</div>
+                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap relative z-10 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{aiReport || "💡 系统正在尝试多版本 API 轮询。如果持续报错，请检查 Key 有效期或代理设置。"}</div>
                                 </div>
-                                <div className={`p-8 rounded-[35px] border flex flex-col gap-5 ${isDarkMode ? 'bg-teal-900/10 border-teal-800/40' : 'bg-teal-50 border-teal-100'}`}>
+                                <div className={`p-8 rounded-[35px] border flex flex-col gap-5 transition-all ${isDarkMode ? 'bg-teal-900/10 border-teal-800/40' : 'bg-teal-50 border-teal-100'}`}>
                                     <div className="flex items-center justify-between"><div className="flex items-center gap-3 text-teal-500"><Search className="w-6 h-6"/><span className="text-xs font-black uppercase">裸K形态扫描</span></div><button onClick={()=>handleAI('scan')} disabled={isScanning} className="bg-teal-600 px-4 py-2 rounded-full text-[10px] font-bold text-white disabled:opacity-50 transition-all active:scale-95">执行扫描</button></div>
-                                    <p className={`text-xs font-medium leading-relaxed ${isDarkMode ? 'text-teal-200' : 'text-teal-900'}`}>{priceAction || "等待扫描..."}</p>
+                                    <p className={`text-xs font-medium leading-relaxed ${isDarkMode ? 'text-teal-200' : 'text-teal-900'}`}>{priceAction || "等待扫描信号..."}</p>
                                 </div>
                             </div>
                         )}
 
                         {activeTab === 'fundamentals' && (
                             <div className="space-y-6 animate-in fade-in duration-500">
-                                <div className={`p-8 rounded-[40px] border flex flex-col min-h-[350px] shadow-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-xl'}`}>
+                                <div className={`p-8 rounded-[40px] border flex flex-col min-h-[350px] shadow-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}>
                                     <div className="flex justify-between items-center mb-8"><div className="flex items-center gap-3 text-amber-500"><Scale className="w-6 h-6"/><h3 className="text-xl font-black tracking-tighter">深度基本面审计</h3></div><button onClick={()=>handleAI('audit')} disabled={isAuditing} className="bg-amber-600 text-white px-5 py-2 rounded-full text-[10px] font-black disabled:opacity-50 active:scale-95 transition-all">价值诊断</button></div>
-                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{fundamentalAudit || "让 AI 价值投资模型为您深度诊断财务健康度。"}</div>
+                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{fundamentalAudit || "让 AI 为您深度分析财务护城河。"}</div>
                                 </div>
                                 <div className="grid grid-cols-2 gap-4">
                                     <FundamentalItem label="总市值" value={currentStock.cap} isDarkMode={isDarkMode}/>
@@ -489,10 +489,10 @@ const StockDashboard = () => {
                             <div className="space-y-8 animate-in fade-in duration-500 pb-20">
                                 <div className={`p-8 rounded-[40px] border flex flex-col min-h-[200px] ${isDarkMode ? 'bg-blue-900/10 border-blue-800/40' : 'bg-blue-50 border-blue-100'}`}>
                                     <div className="flex justify-between items-center mb-8"><div className="flex items-center gap-3 text-blue-500"><Newspaper className="w-6 h-6"/><h3 className="text-xl font-black tracking-tighter">舆情情绪提炼</h3></div><button onClick={()=>handleAI('news')} disabled={isSummarizing} className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black disabled:opacity-50 active:scale-95 transition-all">一键总结</button></div>
-                                    <div className={`text-xs font-medium leading-relaxed ${isDarkMode ? 'text-blue-100' : 'text-blue-900'}`}>{newsSentiment || "快速提炼市场情绪倾向。"}</div>
+                                    <div className={`text-xs font-medium leading-relaxed ${isDarkMode ? 'text-blue-100' : 'text-blue-900'}`}>{newsSentiment || "快速提炼市场核心情绪。"}</div>
                                 </div>
                                 <div className="space-y-4">
-                                    {[{ title: "季度交付数据超预期，市场信心大幅回升", source: "REUTERS", time: "1小时前" }, { title: "分析师下调目标价，担忧宏观经济逆风", source: "CNBC", time: "3小时前" }].map((n, i) => (
+                                    {[{ title: "季度交付数据超预期，市场信心回升", source: "REUTERS", time: "1h前" }, { title: "分析师看好其自动驾驶领先地位", source: "CNBC", time: "3h前" }].map((n, i) => (
                                         <div key={i} className={`p-5 rounded-2xl border transition-all ${isDarkMode ? 'bg-slate-800/50 border-slate-700' : 'bg-white border-gray-100 shadow-sm'}`}>
                                             <div className="text-sm font-black mb-3">{n.title}</div>
                                             <div className="flex justify-between text-[9px] opacity-40 font-black uppercase tracking-widest"><span>{n.source}</span><span>{n.time}</span></div>
