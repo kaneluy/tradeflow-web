@@ -1,5 +1,5 @@
 // api/quote.js
-// 适配 ES Module 规范 (import/export)
+// 适配 ES Module 规范，并修复 Vercel 环境下的导入兼容性问题
 import yahooFinance from 'yahoo-finance2';
 
 export default async function handler(req, res) {
@@ -18,13 +18,24 @@ export default async function handler(req, res) {
     symbol = symbol.replace('US.', '');
 
     try {
-        console.log(`[Vercel API] 正在获取数据: ${symbol}`);
+        console.log(`[Vercel API] 开始请求数据: ${symbol}`);
         
+        /**
+         * 🛠️ 核心修复逻辑：
+         * 在某些 Vercel 编译环境下，yahooFinance 可能会被导入为 { default: yahooFinance }
+         * 我们需要确保调用的是真正的函数对象。
+         */
+        const yf = (yahooFinance && yahooFinance.quote) ? yahooFinance : (yahooFinance.default || yahooFinance);
+
+        if (typeof yf.quote !== 'function') {
+            throw new Error("无法初始化 yahoo-finance2 模块函数。");
+        }
+
         // 并发获取实时行情和历史数据
         const [quote, history] = await Promise.all([
-            yahooFinance.quote(symbol),
-            yahooFinance.historical(symbol, { 
-                period1: '2024-01-01', // 获取较长一段历史
+            yf.quote(symbol),
+            yf.historical(symbol, { 
+                period1: '2024-01-01', 
                 interval: '1d' 
             })
         ]);
@@ -46,7 +57,7 @@ export default async function handler(req, res) {
                 low: h.low,
                 close: h.close,
                 volume: h.volume,
-                vwap: parseFloat(((h.open + h.high + h.low + h.close) / 4).toFixed(2)) // 估算一个 VWAP
+                vwap: parseFloat(((h.open + h.high + h.low + h.close) / 4).toFixed(2))
             })).slice(-100)
         };
 
