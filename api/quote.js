@@ -1,13 +1,9 @@
 // api/quote.js
-// 使用 Node.js 原生兼容加载器，彻底解决库导入为空对象的问题
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-
-// 强行使用 CommonJS 方式加载
-const yahooFinance = require('yahoo-finance2').default || require('yahoo-finance2');
+// 采用 Vercel 推荐的 ESM 原生导入，并加入动态解析逻辑
+import yahooFinance from 'yahoo-finance2';
 
 export default async function handler(req, res) {
-    // 允许跨域配置
+    // 1. 设置跨域头
     res.setHeader('Access-Control-Allow-Credentials', true);
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
@@ -17,23 +13,44 @@ export default async function handler(req, res) {
         return;
     }
 
-    // 获取股票代码并清洗
-    let symbol = req.query.code || 'TSLA';
-    symbol = symbol.replace('US.', '');
+    // 2. 解析股票代码
+    let symbol = (req.query.code || 'TSLA').replace('US.', '');
 
     try {
-        console.log(`[Vercel API] 尝试通过原生加载器获取: ${symbol}`);
+        console.log(`[Vercel API] 正在尝试解析引擎...`);
 
-        // 检查函数是否可用
-        if (!yahooFinance || typeof yahooFinance.quote !== 'function') {
-            throw new Error("数据引擎加载失败，库对象不可用。");
+        /**
+         * 🛠️ 核心修复逻辑：
+         * 针对 Vercel 环境下 yahoo-finance2 导入结构不确定的问题进行“三级跳”探测
+         */
+        let yf = yahooFinance;
+
+        // 第一级：标准导入
+        if (!yf || (typeof yf.quote !== 'function' && yf.default)) {
+            yf = yf.default;
         }
 
-        // 并发获取实时行情和历史数据
-        // yahoo-finance2 v2 版本需要使用其内部方法
+        // 第二级：如果还是不行，说明库加载可能出了断层，尝试动态重载
+        if (!yf || typeof yf.quote !== 'function') {
+            try {
+                const dynamicImport = await import('yahoo-finance2');
+                yf = dynamicImport.default || dynamicImport;
+            } catch (e) {
+                console.error("动态加载失败:", e.message);
+            }
+        }
+
+        // 最终检查
+        if (!yf || typeof yf.quote !== 'function') {
+            throw new Error("数据引擎初始化失败：找不到核心函数。请检查依赖是否安装。");
+        }
+
+        console.log(`[Vercel API] 引擎就绪，正在抓取: ${symbol}`);
+
+        // 3. 并发获取实时报价和历史数据
         const [quote, history] = await Promise.all([
-            yahooFinance.quote(symbol),
-            yahooFinance.historical(symbol, { 
+            yf.quote(symbol),
+            yf.historical(symbol, { 
                 period1: '2024-01-01', 
                 interval: '1d' 
             })
@@ -41,7 +58,7 @@ export default async function handler(req, res) {
 
         if (!quote) throw new Error(`未找到代码 ${symbol} 的数据。`);
 
-        // 构造标准响应格式
+        // 4. 格式化并返回
         const formattedData = {
             symbol: symbol,
             price: quote.regularMarketPrice,
@@ -50,7 +67,7 @@ export default async function handler(req, res) {
             dayOpen: quote.regularMarketOpen,
             dayHigh: quote.regularMarketDayHigh,
             dayLow: quote.regularMarketDayLow,
-            source: 'Vercel Cloud (Native Bridge)',
+            source: 'Vercel Cloud (Unified Engine)',
             history: (history || []).map(h => ({
                 time: h.date instanceof Date ? h.date.toISOString().split('T')[0] : h.date,
                 open: h.open,
@@ -63,13 +80,13 @@ export default async function handler(req, res) {
         };
 
         return res.status(200).json(formattedData);
-        
+
     } catch (error) {
-        console.error(`[Vercel API] 异常:`, error.message);
+        console.error(`[Vercel API] 捕获异常:`, error.message);
         return res.status(500).json({ 
-            error: "行情获取失败", 
+            error: "接口响应异常", 
             details: error.message,
-            suggestion: "请确保 package.json 中 yahoo-finance2 版本正确"
+            suggestion: "请确保 package.json 中已包含 'yahoo-finance2'"
         });
     }
 }
