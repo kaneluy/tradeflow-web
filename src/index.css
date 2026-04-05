@@ -1,24 +1,36 @@
-/* 基础重置与背景注入 */
-:root {
-  color-scheme: dark;
-}
+@import "tailwindcss";
 
+/* 核心布局修复：确保深色背景铺满全屏，文字为白色 */
 html, body, #root {
   margin: 0;
   padding: 0;
   height: 100%;
   width: 100%;
-  background-color: #020617 !important; /* 强制深色背景 */
+  background-color: #020617 !important; /* 强制深色背景 (Slate-950) */
   color: #ffffff;
   font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
-/* 强制修复因 Tailwind 未加载导致的布局堆叠 */
+/* 兼容性强制修复：如果 Tailwind 编译因环境问题延迟，以下样式确保基础布局不坍塌 */
 .flex { display: flex; }
 .flex-col { flex-direction: column; }
 .grid { display: grid; }
 .hidden { display: none; }
 .bg-slate-950 { background-color: #020617; }
 .text-white { color: #ffffff; }
-.p-4 { padding: 1rem; }
-.gap-4 { gap: 1rem; }
+
+/* 滚动条美化：适配量化终端的高级感 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #020617;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
