@@ -85,69 +85,66 @@ class ErrorBoundary extends React.Component {
 // ==========================================
 
 /**
- * 🛠️ 智能 AI 通信引擎 (V15.1 真实错误透传版)
+ * 🛠️ 智能 AI 通信引擎 (V15.2 真实错误穿透版)
  */
 const callGeminiAPI = async (prompt, userKey, backendUrl = "") => {
   const cleanKey = (userKey || "").trim();
   if (!cleanKey) return "⚠️ 请在左下角设置中填入 Gemini API Key。";
 
-  const proxyPath = backendUrl 
-    ? (backendUrl.endsWith('/') ? `${backendUrl}api/ai` : `${backendUrl}/api/ai`) 
-    : "/api/ai";
+  const payload = { contents: [{ parts: [{ text: prompt }] }] };
+  let directError = null;
 
+  // 策略 A：强制直连测试（能抓到 100% 真实的 Google 报错）
   try {
-    const response = await fetch(proxyPath, {
+    // 使用最先进的 2.0-flash 模型
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${cleanKey}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    
+    const data = await res.json().catch(() => null);
+    
+    if (res.ok && data?.candidates) {
+      return data.candidates[0].content.parts[0].text;
+    } else if (data?.error?.message) {
+      // 🎉 我们抓到了真实的报错！
+      return `⚠️ Google API 明确拒绝了您的请求:\n\n"${data.error.message}"\n\n📌 诊断建议：\n1. 请检查 Key 是否带有多余的空格或隐形字符。\n2. 如果是刚申请的 Key，请等待几分钟再生效。\n3. 该 Key 所在的 Google 账号可能没有开通访问权限。`;
+    }
+  } catch (e) {
+    // 直连抛出异常，说明被本地防火墙拦截了
+    directError = e.message;
+  }
+
+  // 策略 B：直连被拦截时，使用您的 Vercel 云端代理
+  try {
+    const proxyPath = backendUrl 
+      ? (backendUrl.endsWith('/') ? `${backendUrl}api/ai` : `${backendUrl}/api/ai`) 
+      : "/api/ai";
+
+    const res = await fetch(proxyPath, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt, key: cleanKey })
     });
     
-    // 如果代理服务器有响应（无论成功还是 Google 报错）
-    if (response.status !== 404) {
-      const data = await response.json().catch(() => ({}));
-      
-      if (response.ok) {
-        // 兼容旧代理文件的模糊报错
-        if (data.text === "AI 响应异常" || data.text === "AI 引擎无响应") {
-            return `⚠️ 云端代理已接通，但 Google 拒绝了请求。可能原因：\n1. API Key 复制不完整或无效\n2. 该 Key 已被 Google 封禁。`;
-        }
-        return data.text || "AI 返回内容为空。";
-      } else {
-        // 透传新代理文件捕获的真实 Google 报错
-        return `⚠️ Google API 报错: ${data.error || response.statusText}\n请检查您的 API Key 是否正确有效。`;
+    const data = await res.json().catch(() => ({}));
+
+    if (res.ok) {
+      // 拦截掉旧代理文件的“废话”报错，暴露出真正的问题
+      if (data.text === "AI 响应异常" || data.text === "AI 引擎无响应") {
+         return `⚠️ 您的 Vercel 云端代理已接通，但 Google API 认为此 Key 无效。\n\n📌 诊断建议：\n1. 您的 API Key (${cleanKey.substring(0, 6)}...) 100% 存在权限问题或未激活。\n2. 建议在 Google AI Studio 中删除旧 Key，重新生成一个全新的，然后回到系统设置中重新填入。`;
       }
+      return data.text || "AI 返回为空";
+    } else {
+      return `⚠️ 代理服务器返回错误: ${data.error || res.statusText}`;
     }
   } catch (e) {
-    console.warn("云端代理未命中或调用失败:", e.message);
+    console.warn("云端代理也不可用");
   }
 
-  // 策略 B：降级为浏览器直连探测 (需要全局海外代理)
-  const configs = [
-    { v: "v1beta", m: "gemini-1.5-flash" },
-    { v: "v1", m: "gemini-1.5-flash" }
-  ];
-
-  let errors = [];
-  for (const cfg of configs) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/${cfg.v}/models/${cfg.m}:generateContent?key=${cleanKey}`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        return data.candidates?.[0]?.content?.parts?.[0]?.text || "AI 引擎无输出。";
-      }
-      errors.push(`${cfg.v}:${response.status}`);
-    } catch (e) { 
-      errors.push(`直连拦截`); 
-    }
-  }
-
-  return `网络环境不支持直连。\n请确保 Github 的 api/ai.js 部署成功，或开启全局代理。`;
+  return `🚫 连接全面受阻。\n直连拦截原因: ${directError}\n\n请尝试开启全局梯子 (VPN) 后再试。`;
 };
 
 const calculateIndicators = (data) => {
@@ -357,7 +354,7 @@ const StockDashboard = () => {
                 </div>
                 <div>
                     <h1 className="text-2xl font-black tracking-tighter italic">TradeFlow</h1>
-                    <p className="text-[10px] opacity-40 font-mono">QUANTUM ENGINE V15.1</p>
+                    <p className="text-[10px] opacity-40 font-mono">QUANTUM ENGINE V15.2</p>
                 </div>
             </div>
         </div>
@@ -481,7 +478,7 @@ const StockDashboard = () => {
                                             {isAiLoading ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4"/>} 一键生成
                                         </button>
                                     </div>
-                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap relative z-10 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{aiReport || "💡 点击生成获取大白话操作建议。如果报错，您将能看到具体的 Google 拦截原因。"}</div>
+                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap relative z-10 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{aiReport || "💡 点击生成获取大白话操作建议。如果报错，您将能看到 Google 给出的最真实拦截原因。"}</div>
                                 </div>
                                 <div className={`p-8 rounded-[35px] border flex flex-col gap-5 transition-all ${isDarkMode ? 'bg-teal-900/10 border-teal-800/40' : 'bg-teal-50 border-teal-100'}`}>
                                     <div className="flex items-center justify-between"><div className="flex items-center gap-3 text-teal-500"><Search className="w-6 h-6"/><span className="text-xs font-black uppercase">裸K形态扫描</span></div><button onClick={()=>handleAI('scan')} disabled={isScanning} className="bg-teal-600 px-4 py-2 rounded-full text-[10px] font-bold text-white disabled:opacity-50 transition-all active:scale-95">执行扫描</button></div>
