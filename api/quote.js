@@ -57,25 +57,36 @@ export default async function handler(req, res) {
     // 初始化引擎
     const engine = initEngine();
     
-    // 安全检查：如果还是没拿到正确的对象，返回友好提示
+    // 安全检查
     if (!engine || typeof engine.quote !== 'function') {
         return res.status(500).json({ 
             error: "引擎初始化失败", 
-            details: "无法定位 quote 函数。请确保 package.json 已正确安装最新版 yahoo-finance2。" 
+            details: "无法定位 quote 函数。请确保依赖已正确安装。" 
         });
     }
 
     // 解析股票代码
-    let symbol = (req.query.code || 'TSLA').replace('US.', '');
+    let symbol = (req.query.code || 'TSLA').replace('US.', '').toUpperCase();
 
     try {
+        /**
+         * 🛠️ 终极参数修复：
+         * Vercel 环境下，Date 对象有时会发生序列化异常。
+         * 我们直接使用 Unix 时间戳（秒），这是雅虎底层 API 最稳定的格式。
+         */
+        const startDate = Math.floor(new Date('2024-01-01').getTime() / 1000);
+        const endDate = Math.floor(Date.now() / 1000);
+
         // 并发获取实时报价和历史数据
-        // 🛠️ 关键修复：v3 版本要求 period1 必须是 Date 对象
         const [quote, history] = await Promise.all([
             engine.quote(symbol),
             engine.historical(symbol, { 
-                period1: new Date('2024-01-01'), // 修复：使用 Date 对象而非字符串
+                period1: startDate, 
+                period2: endDate,
                 interval: '1d' 
+            }).catch(hErr => {
+                console.warn("历史数据抓取微调:", hErr.message);
+                return []; // 如果历史数据报错，不影响实时报价返回
             })
         ]).catch(e => {
             throw new Error(`雅虎接口返回错误: ${e.message}`);
@@ -92,9 +103,8 @@ export default async function handler(req, res) {
             dayOpen: quote.regularMarketOpen,
             dayHigh: quote.regularMarketDayHigh,
             dayLow: quote.regularMarketDayLow,
-            source: 'Vercel Cloud (Auto-Detected Engine)',
+            source: 'Vercel Cloud (Timestamp-Engine)',
             history: (history || []).map(h => ({
-                // 确保时间格式统一
                 time: h.date instanceof Date ? h.date.toISOString().split('T')[0] : h.date,
                 open: h.open,
                 high: h.high,
