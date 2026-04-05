@@ -19,7 +19,7 @@ function initEngine() {
         
         /**
          * 探测方式 A: 寻找 YahooFinance 类并实例化 (v3 标准)
-         * 雅虎库升级到 v3 后，如果不实例化直接调用 quote 会抛出您看到的那个错误。
+         * 雅虎库升级到 v3 后，如果不实例化直接调用 quote 会抛出错误。
          */
         let YahooFinanceClass = yfModule.YahooFinance || (mod && mod.YahooFinance) || (typeof mod === 'function' ? mod : null);
 
@@ -70,10 +70,11 @@ export default async function handler(req, res) {
 
     try {
         // 并发获取实时报价和历史数据
+        // 🛠️ 关键修复：v3 版本要求 period1 必须是 Date 对象
         const [quote, history] = await Promise.all([
             engine.quote(symbol),
             engine.historical(symbol, { 
-                period1: '2024-01-01', 
+                period1: new Date('2024-01-01'), // 修复：使用 Date 对象而非字符串
                 interval: '1d' 
             })
         ]).catch(e => {
@@ -93,6 +94,7 @@ export default async function handler(req, res) {
             dayLow: quote.regularMarketDayLow,
             source: 'Vercel Cloud (Auto-Detected Engine)',
             history: (history || []).map(h => ({
+                // 确保时间格式统一
                 time: h.date instanceof Date ? h.date.toISOString().split('T')[0] : h.date,
                 open: h.open,
                 high: h.high,
