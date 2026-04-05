@@ -1,9 +1,40 @@
 // api/quote.js
-// 针对 yahoo-finance2 v3 版本优化的 ESM 导入与实例化逻辑
-import { YahooFinance } from 'yahoo-finance2';
+// 针对 Vercel 环境优化的自动版本探测逻辑 (支持 v2 和 v3)
 
-// 1. 创建引擎实例 (v3 强制要求)
-const yf = new YahooFinance();
+// 1. 先尝试导入模块
+import * as yfModule from 'yahoo-finance2';
+
+/**
+ * 🛠️ 核心自愈逻辑：
+ * 自动识别 yahoo-finance2 的版本并进行初始化。
+ */
+let yf = null;
+
+function initEngine() {
+    if (yf) return yf;
+    
+    // 获取模块核心
+    const mod = yfModule.default || yfModule;
+    
+    try {
+        // 探测方式 A: 检查是否存在 YahooFinance 类 (v3 标志)
+        if (yfModule.YahooFinance) {
+            yf = new yfModule.YahooFinance();
+            console.log("[API] 引擎以 v3 模式启动");
+        } 
+        // 探测方式 B: 检查模块本身是否包含核心函数 (v2 标志)
+        else if (mod.quote || (mod.default && mod.default.quote)) {
+            yf = mod.quote ? mod : mod.default;
+            console.log("[API] 引擎以 v2 模式启动");
+        }
+        else {
+            throw new Error("无法识别库结构");
+        }
+    } catch (e) {
+        console.error("[API Init Error]", e.message);
+    }
+    return yf;
+}
 
 export default async function handler(req, res) {
     // 设置跨域头
@@ -16,27 +47,34 @@ export default async function handler(req, res) {
         return;
     }
 
+    // 初始化引擎
+    const engine = initEngine();
+    if (!engine || typeof engine.quote !== 'function') {
+        return res.status(500).json({ 
+            error: "引擎初始化失败", 
+            details: "请在本地重新执行 npm install yahoo-finance2@latest 并重新部署" 
+        });
+    }
+
     // 解析股票代码
     let symbol = (req.query.code || 'TSLA').replace('US.', '');
 
     try {
-        console.log(`[Vercel API] 引擎已实例化，正在抓取: ${symbol}`);
-
-        // 2. 使用实例 yf 调用方法
         // 并发获取实时报价和历史数据
+        // 注意：雅虎 API 有时会因为请求频率过快报错，这里加个保护
         const [quote, history] = await Promise.all([
-            yf.quote(symbol),
-            yf.historical(symbol, { 
+            engine.quote(symbol),
+            engine.historical(symbol, { 
                 period1: '2024-01-01', 
                 interval: '1d' 
             })
-        ]);
+        ]).catch(e => {
+            throw new Error(`雅虎接口返回错误: ${e.message}`);
+        });
 
-        if (!quote) {
-            throw new Error(`未找到代码 ${symbol} 的数据。`);
-        }
+        if (!quote) throw new Error(`未找到代码 ${symbol} 的数据`);
 
-        // 3. 构造标准响应格式
+        // 构造标准响应格式
         const formattedData = {
             symbol: symbol,
             price: quote.regularMarketPrice,
@@ -45,7 +83,7 @@ export default async function handler(req, res) {
             dayOpen: quote.regularMarketOpen,
             dayHigh: quote.regularMarketDayHigh,
             dayLow: quote.regularMarketDayLow,
-            source: 'Vercel Cloud (v3 Engine)',
+            source: 'Vercel Cloud (Auto-Detected Engine)',
             history: (history || []).map(h => ({
                 time: h.date instanceof Date ? h.date.toISOString().split('T')[0] : h.date,
                 open: h.open,
@@ -60,15 +98,9 @@ export default async function handler(req, res) {
         return res.status(200).json(formattedData);
 
     } catch (error) {
-        console.error(`[Vercel API] 捕获异常:`, error.message);
-        
-        // 如果是常见的频率限制错误
-        if (error.message.includes('429')) {
-            return res.status(429).json({ error: "请求过于频繁，请稍后再试" });
-        }
-
+        console.error(`[Vercel API] 异常:`, error.message);
         return res.status(500).json({ 
-            error: "数据抓取异常", 
+            error: "接口响应异常", 
             details: error.message 
         });
     }
