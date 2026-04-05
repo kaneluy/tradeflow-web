@@ -6,29 +6,36 @@ import * as yfModule from 'yahoo-finance2';
 
 /**
  * 🛠️ 核心自愈逻辑：
- * 自动识别 yahoo-finance2 的版本并进行初始化。
+ * 针对 yahoo-finance2 v3 强制实例化的要求进行优化。
  */
 let yf = null;
 
 function initEngine() {
     if (yf) return yf;
     
-    // 获取模块核心
-    const mod = yfModule.default || yfModule;
-    
     try {
-        // 探测方式 A: 检查是否存在 YahooFinance 类 (v3 标志)
-        if (yfModule.YahooFinance) {
-            yf = new yfModule.YahooFinance();
-            console.log("[API] 引擎以 v3 模式启动");
+        // 获取模块核心
+        const mod = yfModule.default || yfModule;
+        
+        /**
+         * 探测方式 A: 寻找 YahooFinance 类并实例化 (v3 标准)
+         * 雅虎库升级到 v3 后，如果不实例化直接调用 quote 会抛出您看到的那个错误。
+         */
+        let YahooFinanceClass = yfModule.YahooFinance || (mod && mod.YahooFinance) || (typeof mod === 'function' ? mod : null);
+
+        if (YahooFinanceClass && typeof YahooFinanceClass === 'function') {
+            yf = new YahooFinanceClass();
+            console.log("[API] 引擎以 v3 实例模式成功启动");
         } 
-        // 探测方式 B: 检查模块本身是否包含核心函数 (v2 标志)
+        /**
+         * 探测方式 B: 兼容 v2 或某些特殊的打包结构
+         */
         else if (mod.quote || (mod.default && mod.default.quote)) {
             yf = mod.quote ? mod : mod.default;
-            console.log("[API] 引擎以 v2 模式启动");
+            console.log("[API] 引擎以 v2/兼容模式启动");
         }
         else {
-            throw new Error("无法识别库结构");
+            throw new Error("无法识别库结构，所有探测均失效");
         }
     } catch (e) {
         console.error("[API Init Error]", e.message);
@@ -49,10 +56,12 @@ export default async function handler(req, res) {
 
     // 初始化引擎
     const engine = initEngine();
+    
+    // 安全检查：如果还是没拿到正确的对象，返回友好提示
     if (!engine || typeof engine.quote !== 'function') {
         return res.status(500).json({ 
             error: "引擎初始化失败", 
-            details: "请在本地重新执行 npm install yahoo-finance2@latest 并重新部署" 
+            details: "无法定位 quote 函数。请确保 package.json 已正确安装最新版 yahoo-finance2。" 
         });
     }
 
@@ -61,7 +70,6 @@ export default async function handler(req, res) {
 
     try {
         // 并发获取实时报价和历史数据
-        // 注意：雅虎 API 有时会因为请求频率过快报错，这里加个保护
         const [quote, history] = await Promise.all([
             engine.quote(symbol),
             engine.historical(symbol, { 
