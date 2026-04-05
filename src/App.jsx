@@ -85,15 +85,12 @@ class ErrorBoundary extends React.Component {
 // ==========================================
 
 /**
- * 🛠️ 智能 AI 通信引擎 (V15.0)
- * 深度修复 404/403/Failed to fetch 错误
+ * 🛠️ 智能 AI 通信引擎 (V15.1 真实错误透传版)
  */
 const callGeminiAPI = async (prompt, userKey, backendUrl = "") => {
   const cleanKey = (userKey || "").trim();
   if (!cleanKey) return "⚠️ 请在左下角设置中填入 Gemini API Key。";
 
-  // 策略 A：云端中转代理 (解决本地环境无法连 Google 的问题)
-  // 逻辑：如果设置了后端地址，则拼接 /api/ai；否则使用相对路径。
   const proxyPath = backendUrl 
     ? (backendUrl.endsWith('/') ? `${backendUrl}api/ai` : `${backendUrl}/api/ai`) 
     : "/api/ai";
@@ -105,16 +102,23 @@ const callGeminiAPI = async (prompt, userKey, backendUrl = "") => {
       body: JSON.stringify({ prompt, key: cleanKey })
     });
     
-    if (response.ok) {
-      const data = await response.json();
-      return data.text || "AI 返回内容为空。";
-    } else if (response.status !== 404) {
-      // 如果不是 404，说明代理接口存在但报错了
-      const errDetail = await response.text();
-      throw new Error(`代理服务错误: ${response.status} (${errDetail.substring(0, 50)})`);
+    // 如果代理服务器有响应（无论成功还是 Google 报错）
+    if (response.status !== 404) {
+      const data = await response.json().catch(() => ({}));
+      
+      if (response.ok) {
+        // 兼容旧代理文件的模糊报错
+        if (data.text === "AI 响应异常" || data.text === "AI 引擎无响应") {
+            return `⚠️ 云端代理已接通，但 Google 拒绝了请求。可能原因：\n1. API Key 复制不完整或无效\n2. 该 Key 已被 Google 封禁。`;
+        }
+        return data.text || "AI 返回内容为空。";
+      } else {
+        // 透传新代理文件捕获的真实 Google 报错
+        return `⚠️ Google API 报错: ${data.error || response.statusText}\n请检查您的 API Key 是否正确有效。`;
+      }
     }
   } catch (e) {
-    console.warn("云端代理调用失败:", e.message);
+    console.warn("云端代理未命中或调用失败:", e.message);
   }
 
   // 策略 B：降级为浏览器直连探测 (需要全局海外代理)
@@ -139,11 +143,11 @@ const callGeminiAPI = async (prompt, userKey, backendUrl = "") => {
       }
       errors.push(`${cfg.v}:${response.status}`);
     } catch (e) { 
-      errors.push(`直连失败(${e.message.substring(0, 20)})`); 
+      errors.push(`直连拦截`); 
     }
   }
 
-  return `AI 响应异常。\n\n[排查详情]:\n中转路径: ${proxyPath}\n最后尝试: ${errors.join(' | ')}\n\n[建议]:\n1. 请检查 GitHub 中是否存在 api/ai.js 且已推送；\n2. 确保在设置中配置了正确的 Vercel 域名（若直连失败）；\n3. 检查 API Key 是否有效。`;
+  return `网络环境不支持直连。\n请确保 Github 的 api/ai.js 部署成功，或开启全局代理。`;
 };
 
 const calculateIndicators = (data) => {
@@ -348,12 +352,12 @@ const StockDashboard = () => {
       <aside className={`w-72 border-r flex flex-col transition-all ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-xl'}`}>
         <div className="p-8 border-b border-inherit">
             <div className="flex items-center gap-4 group">
-                <div className="p-3 bg-blue-600 rounded-2xl shadow-xl shadow-blue-500/30 group-hover:rotate-12 transition-transform">
+                <div className="p-3 bg-blue-600 rounded-2xl shadow-xl shadow-blue-500/30">
                     <Activity className="w-6 h-6 text-white"/>
                 </div>
                 <div>
                     <h1 className="text-2xl font-black tracking-tighter italic">TradeFlow</h1>
-                    <p className="text-[10px] opacity-40 font-mono">QUANTUM ENGINE V15.0</p>
+                    <p className="text-[10px] opacity-40 font-mono">QUANTUM ENGINE V15.1</p>
                 </div>
             </div>
         </div>
@@ -385,7 +389,7 @@ const StockDashboard = () => {
 
         <div className="p-6 border-t border-inherit space-y-4">
             <button onClick={()=>setIsRealTime(!isRealTime)} className={`w-full p-4 rounded-2xl flex items-center justify-between text-xs font-black border transition-all ${isRealTime ? 'bg-green-500/10 border-green-500 text-green-500 shadow-lg' : 'bg-slate-800 border-slate-700 text-slate-500'}`}>
-                <div className="flex items-center gap-2">{isRealTime ? <Wifi className="w-4 h-4"/> : <WifiOff className="w-4 h-4"/>}<span>{isRealTime ? '实盘连接中' : '切换实盘数据'}</span></div>
+                <div className="flex items-center gap-2">{isRealTime ? <Wifi className="w-4 h-4"/> : <WifiOff className="w-4 h-4"/>}<span>{isRealTime ? '实盘连接中' : '离线演示模式'}</span></div>
                 {isRealTime && <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_#10b981]"/>}
             </button>
             <div className="flex gap-2">
@@ -477,7 +481,7 @@ const StockDashboard = () => {
                                             {isAiLoading ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4"/>} 一键生成
                                         </button>
                                     </div>
-                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap relative z-10 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{aiReport || "💡 系统正在尝试多版本轮询。请确保设置中的 API Key 输入正确。"}</div>
+                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap relative z-10 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{aiReport || "💡 点击生成获取大白话操作建议。如果报错，您将能看到具体的 Google 拦截原因。"}</div>
                                 </div>
                                 <div className={`p-8 rounded-[35px] border flex flex-col gap-5 transition-all ${isDarkMode ? 'bg-teal-900/10 border-teal-800/40' : 'bg-teal-50 border-teal-100'}`}>
                                     <div className="flex items-center justify-between"><div className="flex items-center gap-3 text-teal-500"><Search className="w-6 h-6"/><span className="text-xs font-black uppercase">裸K形态扫描</span></div><button onClick={()=>handleAI('scan')} disabled={isScanning} className="bg-teal-600 px-4 py-2 rounded-full text-[10px] font-bold text-white disabled:opacity-50 transition-all active:scale-95">执行扫描</button></div>
