@@ -1,13 +1,35 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>tradeflow-web</title>
+    <title>TradeFlow | 实时美股分析终端</title>
+    
+    <!-- 引入 Tailwind CDN：这是确保您之前配置的 bg-slate-950 等样式生效的最快方法 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script>
+      // Tailwind 配置：确保它知道我们使用的是深色模式
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              slate: {
+                950: '#020617',
+              },
+            },
+          },
+        },
+      }
+    </script>
   </head>
-  <body>
+  <body class="bg-slate-950 text-white">
+    <!-- React 应用会挂载到这个 div 中 -->
     <div id="root"></div>
+    
+    <!-- 引入主程序入口，请确保路径与您的项目结构一致 -->
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

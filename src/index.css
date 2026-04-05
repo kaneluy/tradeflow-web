@@ -1,11 +1,24 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-/* 额外补充：确保背景颜色和字体能够正确继承，解决页面发白的问题 */
-html, body, #root {
-  height: 100%;
-  margin: 0;
-  background-color: #020617; /* 对应 slate-950，确保深色主题底色正确 */
-  color: white;
+/* 基础重置与背景注入 */
+:root {
+  color-scheme: dark;
 }
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+  background-color: #020617 !important; /* 强制深色背景 */
+  color: #ffffff;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* 强制修复因 Tailwind 未加载导致的布局堆叠 */
+.flex { display: flex; }
+.flex-col { flex-direction: column; }
+.grid { display: grid; }
+.hidden { display: none; }
+.bg-slate-950 { background-color: #020617; }
+.text-white { color: #ffffff; }
+.p-4 { padding: 1rem; }
+.gap-4 { gap: 1rem; }
