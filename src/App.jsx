@@ -84,25 +84,50 @@ class ErrorBoundary extends React.Component {
 // 1. API 通信与量化算法
 // ==========================================
 
-const callGeminiAPI = async (prompt, userKey) => {
-  if (!userKey) return "⚠️ 请点击左下角设置按钮，填入您的 Gemini API Key。";
+/**
+ * 🛠️ 智能 AI 通信引擎 (V14.5 增强版)
+ * 解决 404/403 报错，并支持网络环境自动适配
+ */
+const callGeminiAPI = async (prompt, userKey, backendUrl = "") => {
+  const cleanKey = (userKey || "").trim();
+  if (!cleanKey) return "⚠️ 请点击左下角设置按钮，填入您的 Gemini API Key。";
   
-  // 采用更稳定的 1.5-flash 模型，适合大多数 API Key
-  const model = "gemini-1.5-flash"; 
-  try {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${userKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-    });
-    
-    if (response.status === 403) return "AI 访问被拒绝 (403)。请检查您的 API Key 是否有效，或检查您的 IP 是否在受支持区域。";
-    if (response.status === 429) return "请求过于频繁 (429)。请稍后再试或换一个 API Key。";
-    if (!response.ok) return `AI 服务暂时无法响应 (${response.status})`;
-    
-    const data = await response.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || "AI 暂时无法回答。";
-  } catch (e) { return "网络连接异常，无法触达 AI 引擎。"; }
+  // 备选方案列表
+  const apiConfigs = [
+    { url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}` },
+    { url: `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${cleanKey}` }
+  ];
+
+  let lastError = "";
+
+  for (const config of apiConfigs) {
+    try {
+      const response = await fetch(config.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+      });
+      
+      if (response.status === 403) return "AI 访问被拒绝 (403)。Key 错误或所在 IP 区域不支持（如中国）。建议部署后使用云端访问。";
+      if (response.status === 404) {
+          lastError = "404";
+          continue; // 尝试下一个配置
+      }
+      if (response.status === 429) return "请求过于频繁 (429)。请 60 秒后再试。";
+      
+      if (!response.ok) {
+          lastError = `HTTP ${response.status}`;
+          continue;
+      }
+      
+      const data = await response.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || "AI 引擎无响应。";
+    } catch (e) {
+      lastError = "网络拦截/超时";
+    }
+  }
+
+  return `AI 服务响应失败 (${lastError})。可能是由于本地网络无法直连 Google 服务器。请确保已开启海外全局代理，或在部署后的 Vercel 环境下测试。`;
 };
 
 const calculateIndicators = (data) => {
@@ -246,9 +271,7 @@ const StockDashboard = () => {
         if (!isRealTime) return;
         try {
             const sym = selectedSymbol.replace('US.', '');
-            // 自动处理路径拼接
             const url = backendUrl ? (backendUrl.endsWith('/') ? `${backendUrl}api/quote?code=${sym}` : `${backendUrl}/api/quote?code=${sym}`) : `/api/quote?code=${sym}`;
-            
             const response = await fetch(url);
             const res = await response.json();
             setMarketData(prev => {
@@ -273,23 +296,23 @@ const StockDashboard = () => {
       if (type === 'report') {
           setIsAiLoading(true);
           prompt = `分析股票 ${selectedSymbol}，现价 $${currentStock.price}，趋势状态为 ${currentStock.longTermTrend?.label}。请提供简短的技术点评和止损点建议。`;
-          setAiReport(await callGeminiAPI(prompt, geminiKey));
+          setAiReport(await callGeminiAPI(prompt, geminiKey, backendUrl));
           setIsAiLoading(false);
       } else if (type === 'scan') {
           setIsScanning(true);
           const recent = currentStock.data.slice(-5).map(d => `收:${d.close}`).join(', ');
           prompt = `基于最近数据 [${recent}] 扫描股票 ${selectedSymbol} 的裸K形态（如吞没、十字星等），给出极简判断。`;
-          setPriceAction(await callGeminiAPI(prompt, geminiKey));
+          setPriceAction(await callGeminiAPI(prompt, geminiKey, backendUrl));
           setIsScanning(false);
       } else if (type === 'audit') {
           setIsAuditing(true);
           prompt = `作为价值投资者，请根据市值 ${currentStock.cap} 和市盈率 ${currentStock.pe} 审计 ${selectedSymbol} 的估值风险。`;
-          setFundamentalAudit(await callGeminiAPI(prompt, geminiKey));
+          setFundamentalAudit(await callGeminiAPI(prompt, geminiKey, backendUrl));
           setIsAuditing(false);
       } else if (type === 'news') {
           setIsSummarizing(true);
           prompt = `简要总结 ${selectedSymbol} 最近的市场情绪（看多/看空），并给出理由。`;
-          setNewsSentiment(await callGeminiAPI(prompt, geminiKey));
+          setNewsSentiment(await callGeminiAPI(prompt, geminiKey, backendUrl));
           setIsSummarizing(false);
       }
   };
@@ -321,7 +344,7 @@ const StockDashboard = () => {
 
         <div className="p-6 border-b border-inherit">
             <div className="relative">
-                <input value={tickerInput} onChange={e=>setTickerInput(e.target.value)} onKeyDown={e=>e.key==='Enter' && (setSelectedSymbol(`US.${tickerInput.toUpperCase()}`), setTickerInput(""))} placeholder="代码 (如: BABA)..." className={`w-full p-3 rounded-xl border text-sm font-bold focus:outline-none transition-all ${isDarkMode ? 'bg-slate-950 border-slate-700' : 'bg-slate-100'}`}/>
+                <input value={tickerInput} onChange={e=>setTickerInput(e.target.value)} onKeyDown={e=>e.key==='Enter' && (setSelectedSymbol(`US.${tickerInput.toUpperCase()}`), setTickerInput(""))} placeholder="代码 (如: BABA)..." className={`w-full p-3 rounded-xl border text-sm font-bold focus:outline-none transition-all ${isDarkMode ? 'bg-slate-950 border-slate-700 text-white' : 'bg-slate-100 text-gray-900'}`}/>
                 <PlusCircle onClick={()=>{if(tickerInput){setSelectedSymbol(`US.${tickerInput.toUpperCase()}`); setTickerInput("");}}} className="absolute right-3 top-3 w-5 h-5 text-blue-500 cursor-pointer"/>
             </div>
         </div>
@@ -345,7 +368,7 @@ const StockDashboard = () => {
         </div>
 
         <div className="p-6 border-t border-inherit space-y-4">
-            <button onClick={()=>setIsRealTime(!isRealTime)} className={`w-full p-4 rounded-2xl flex items-center justify-between text-xs font-bold border transition-all ${isRealTime ? 'bg-green-500/10 border-green-500 text-green-500 shadow-lg' : 'bg-slate-800 border-slate-700 text-slate-500'}`}>
+            <button onClick={()=>setIsRealTime(!isRealTime)} className={`w-full p-4 rounded-2xl flex items-center justify-between text-xs font-black border transition-all ${isRealTime ? 'bg-green-500/10 border-green-500 text-green-500 shadow-lg' : 'bg-slate-800 border-slate-700 text-slate-500'}`}>
                 <div className="flex items-center gap-2">{isRealTime ? <Wifi className="w-4 h-4"/> : <WifiOff className="w-4 h-4"/>}<span>{isRealTime ? '实盘连接中' : '切换实盘数据'}</span></div>
                 {isRealTime && <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_#10b981]"/>}
             </button>
@@ -422,23 +445,23 @@ const StockDashboard = () => {
                 </div>
 
                 <div className="col-span-12 xl:col-span-4 flex flex-col gap-8">
-                    <div className={`p-2 rounded-2xl border flex gap-1 ${isDarkMode ? 'bg-slate-950 border-slate-800' : 'bg-white border-gray-200'}`}>
+                    <div className={`p-2 rounded-2xl border flex gap-1 ${isDarkMode ? 'bg-slate-950 border-slate-800' : 'bg-white border-gray-200 shadow-md'}`}>
                         {[{id:'analysis',l:'图表分析'},{id:'fundamentals',l:'基本面诊断'},{id:'news',l:'情绪提炼'}].map(t => (
                             <button key={t.id} onClick={()=>setActiveTab(t.id)} className={`flex-1 py-3 text-xs font-black rounded-xl transition-all ${activeTab === t.id ? 'bg-blue-600 text-white shadow-xl' : 'opacity-40 hover:opacity-100'}`}>{t.l}</button>
                         ))}
                     </div>
 
-                    <div className="flex-1 space-y-8 overflow-y-auto scrollbar-hide pb-20">
+                    <div className="flex-1 space-y-8 overflow-y-auto scrollbar-hide">
                         {activeTab === 'analysis' && (
                             <div className="space-y-8 animate-in fade-in duration-500">
-                                <div className={`p-8 rounded-[40px] border relative overflow-hidden flex flex-col min-h-[380px] ${isDarkMode ? 'bg-slate-900 border-slate-800 shadow-2xl' : 'bg-white shadow-xl'}`}>
+                                <div className={`p-8 rounded-[40px] border relative overflow-hidden flex flex-col min-h-[380px] ${isDarkMode ? 'bg-slate-900 border-slate-800 shadow-2xl' : 'bg-white border-gray-100 shadow-xl'}`}>
                                     <div className="flex justify-between items-center mb-8 relative z-10">
                                         <div className="flex items-center gap-3"><Cpu className="text-purple-500 w-6 h-6"/><h3 className="text-xl font-black tracking-tighter">智能技术研报</h3></div>
                                         <button onClick={()=>handleAI('report')} disabled={isAiLoading} className="bg-purple-600 hover:bg-purple-500 text-white px-6 py-2.5 rounded-full text-xs font-black flex items-center gap-2 active:scale-95 disabled:opacity-50">
                                             {isAiLoading ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4"/>} 一键生成
                                         </button>
                                     </div>
-                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap relative z-10 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{aiReport || "💡 请先在左下角设置中填入 Gemini API Key，然后点击上方按钮生成预测。"}</div>
+                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap relative z-10 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{aiReport || "💡 请先在左下角设置中填入有效的 Gemini API Key。"}</div>
                                 </div>
                                 <div className={`p-8 rounded-[35px] border flex flex-col gap-5 ${isDarkMode ? 'bg-teal-900/10 border-teal-800/40' : 'bg-teal-50 border-teal-100'}`}>
                                     <div className="flex items-center justify-between"><div className="flex items-center gap-3 text-teal-500"><Search className="w-6 h-6"/><span className="text-xs font-black uppercase">裸K形态扫描</span></div><button onClick={()=>handleAI('scan')} disabled={isScanning} className="bg-teal-600 px-4 py-2 rounded-full text-[10px] font-bold text-white disabled:opacity-50 transition-all active:scale-95">执行扫描</button></div>
@@ -449,8 +472,8 @@ const StockDashboard = () => {
 
                         {activeTab === 'fundamentals' && (
                             <div className="space-y-6 animate-in fade-in duration-500">
-                                <div className={`p-8 rounded-[40px] border flex flex-col min-h-[350px] shadow-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white'}`}>
-                                    <div className="flex justify-between items-center mb-8"><div className="flex items-center gap-3 text-amber-500"><Scale className="w-6 h-6"/><h3 className="text-xl font-black tracking-tighter">深度基本面审计</h3></div><button onClick={()=>handleAI('audit')} disabled={isAuditing} className="bg-amber-600 text-white px-5 py-2 rounded-full text-[10px] font-black disabled:opacity-50 transition-all active:scale-95">价值诊断</button></div>
+                                <div className={`p-8 rounded-[40px] border flex flex-col min-h-[350px] shadow-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-xl'}`}>
+                                    <div className="flex justify-between items-center mb-8"><div className="flex items-center gap-3 text-amber-500"><Scale className="w-6 h-6"/><h3 className="text-xl font-black tracking-tighter">深度基本面审计</h3></div><button onClick={()=>handleAI('audit')} disabled={isAuditing} className="bg-amber-600 text-white px-5 py-2 rounded-full text-[10px] font-black disabled:opacity-50 active:scale-95 transition-all">价值诊断</button></div>
                                     <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{fundamentalAudit || "让 AI 价值投资模型为您深度诊断财务健康度。"}</div>
                                 </div>
                                 <div className="grid grid-cols-2 gap-4">
@@ -465,7 +488,7 @@ const StockDashboard = () => {
                         {activeTab === 'news' && (
                             <div className="space-y-8 animate-in fade-in duration-500 pb-20">
                                 <div className={`p-8 rounded-[40px] border flex flex-col min-h-[200px] ${isDarkMode ? 'bg-blue-900/10 border-blue-800/40' : 'bg-blue-50 border-blue-100'}`}>
-                                    <div className="flex justify-between items-center mb-8"><div className="flex items-center gap-3 text-blue-500"><Newspaper className="w-6 h-6"/><h3 className="text-xl font-black tracking-tighter">舆情情绪提炼</h3></div><button onClick={()=>handleAI('news')} disabled={isSummarizing} className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black disabled:opacity-50 transition-all active:scale-95">一键总结</button></div>
+                                    <div className="flex justify-between items-center mb-8"><div className="flex items-center gap-3 text-blue-500"><Newspaper className="w-6 h-6"/><h3 className="text-xl font-black tracking-tighter">舆情情绪提炼</h3></div><button onClick={()=>handleAI('news')} disabled={isSummarizing} className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black disabled:opacity-50 active:scale-95 transition-all">一键总结</button></div>
                                     <div className={`text-xs font-medium leading-relaxed ${isDarkMode ? 'text-blue-100' : 'text-blue-900'}`}>{newsSentiment || "快速提炼市场情绪倾向。"}</div>
                                 </div>
                                 <div className="space-y-4">
