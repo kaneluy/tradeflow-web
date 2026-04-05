@@ -85,15 +85,21 @@ class ErrorBoundary extends React.Component {
 // ==========================================
 
 /**
- * 🛠️ 智能 AI 通信引擎 (V14.9)
+ * 🛠️ 智能 AI 通信引擎 (V15.0)
+ * 深度修复 404/403/Failed to fetch 错误
  */
 const callGeminiAPI = async (prompt, userKey, backendUrl = "") => {
   const cleanKey = (userKey || "").trim();
-  if (!cleanKey) return "⚠️ 请在设置中填入有效的 Gemini API Key。";
+  if (!cleanKey) return "⚠️ 请在左下角设置中填入 Gemini API Key。";
 
-  // 策略 A：优先尝试 Vercel 云端代理 (这是解决拦截的唯一方案)
+  // 策略 A：云端中转代理 (解决本地环境无法连 Google 的问题)
+  // 逻辑：如果设置了后端地址，则拼接 /api/ai；否则使用相对路径。
+  const proxyPath = backendUrl 
+    ? (backendUrl.endsWith('/') ? `${backendUrl}api/ai` : `${backendUrl}/api/ai`) 
+    : "/api/ai";
+
   try {
-    const response = await fetch("/api/ai", {
+    const response = await fetch(proxyPath, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt, key: cleanKey })
@@ -101,18 +107,17 @@ const callGeminiAPI = async (prompt, userKey, backendUrl = "") => {
     
     if (response.ok) {
       const data = await response.json();
-      return data.text || "AI 返回了空内容。";
-    } else if (response.status === 404) {
-      console.warn("未检测到 api/ai.js 代理文件，切换至直连模式...");
-    } else {
-      const errText = await response.text();
-      throw new Error(`云端代理错误: ${response.status} - ${errText}`);
+      return data.text || "AI 返回内容为空。";
+    } else if (response.status !== 404) {
+      // 如果不是 404，说明代理接口存在但报错了
+      const errDetail = await response.text();
+      throw new Error(`代理服务错误: ${response.status} (${errDetail.substring(0, 50)})`);
     }
   } catch (e) {
-    console.log("云端代理不可用，尝试降级至浏览器直连...");
+    console.warn("云端代理调用失败:", e.message);
   }
 
-  // 策略 B：直连探测 (需要全局代理)
+  // 策略 B：降级为浏览器直连探测 (需要全局海外代理)
   const configs = [
     { v: "v1beta", m: "gemini-1.5-flash" },
     { v: "v1", m: "gemini-1.5-flash" }
@@ -127,15 +132,18 @@ const callGeminiAPI = async (prompt, userKey, backendUrl = "") => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
       });
+      
       if (response.ok) {
         const data = await response.json();
-        return data.candidates?.[0]?.content?.parts?.[0]?.text || "AI 暂无内容。";
+        return data.candidates?.[0]?.content?.parts?.[0]?.text || "AI 引擎无输出。";
       }
       errors.push(`${cfg.v}:${response.status}`);
-    } catch (e) { errors.push(e.message); }
+    } catch (e) { 
+      errors.push(`直连失败(${e.message.substring(0, 20)})`); 
+    }
   }
 
-  return `AI 响应异常。\n错误详情: [${errors.join(', ')}]\n\n建议操作：\n1. 请确认是否已在 GitHub 创建 api/ai.js 文件并推送；\n2. 检查您的 Key 是否输入正确且未过期。`;
+  return `AI 响应异常。\n\n[排查详情]:\n中转路径: ${proxyPath}\n最后尝试: ${errors.join(' | ')}\n\n[建议]:\n1. 请检查 GitHub 中是否存在 api/ai.js 且已推送；\n2. 确保在设置中配置了正确的 Vercel 域名（若直连失败）；\n3. 检查 API Key 是否有效。`;
 };
 
 const calculateIndicators = (data) => {
@@ -219,7 +227,7 @@ const SettingsModal = ({ onClose, isDarkMode, currentUrl, currentKey, onSave }) 
                 <div className="space-y-6">
                     <div>
                         <label className="block text-[10px] font-black uppercase tracking-widest opacity-40 mb-2">后端服务器地址</label>
-                        <input value={url} onChange={e=>setUrl(e.target.value)} className={`w-full p-4 rounded-2xl border outline-none ${isDarkMode ? 'bg-slate-950 border-slate-700 text-white' : 'bg-gray-100 text-gray-900'}`} placeholder="保持为空即可" />
+                        <input value={url} onChange={e=>setUrl(e.target.value)} className={`w-full p-4 rounded-2xl border outline-none ${isDarkMode ? 'bg-slate-950 border-slate-700 text-white' : 'bg-gray-100 text-gray-900'}`} placeholder="保持为空或填写 Vercel 域名" />
                     </div>
                     <div>
                         <label className="block text-[10px] font-black uppercase tracking-widest opacity-40 mb-2">Gemini API Key</label>
@@ -250,7 +258,7 @@ const StockDashboard = () => {
   const [tickerInput, setTickerInput] = useState("");
   const [showSettings, setShowSettings] = useState(false);
   
-  // AI 状态
+  // AI 状态控制
   const [aiReport, setAiReport] = useState("");
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [priceAction, setPriceAction] = useState("");
@@ -266,11 +274,13 @@ const StockDashboard = () => {
 
   const currentStock = marketData[selectedSymbol] || marketData['US.TSLA'];
 
+  // 持久化存储
   useEffect(() => {
     localStorage.setItem('tf_backend_url', backendUrl);
     localStorage.setItem('tf_gemini_key', geminiKey);
   }, [backendUrl, geminiKey]);
 
+  // 数据同步循环
   useEffect(() => {
     let intervalId;
     const fetchLoop = async () => {
@@ -301,12 +311,13 @@ const StockDashboard = () => {
       let prompt = "";
       if (type === 'report') {
           setIsAiLoading(true);
-          prompt = `作为高级技术分析师，分析 ${selectedSymbol} 现价 $${currentStock.price}。其趋势目前为 ${currentStock.longTermTrend?.label}。请简短给出操作建议。`;
+          prompt = `分析股票 ${selectedSymbol}，现价 $${currentStock.price}，趋势状态为 ${currentStock.longTermTrend?.label}。请提供简短的技术点评和操作建议。`;
           setAiReport(await callGeminiAPI(prompt, geminiKey, backendUrl));
           setIsAiLoading(false);
       } else if (type === 'scan') {
           setIsScanning(true);
-          prompt = `基于最近价格扫描股票 ${selectedSymbol} 的裸K形态。`;
+          const recent = currentStock.data.slice(-7).map(d => `收:${d.close}`).join(', ');
+          prompt = `基于最近数据 [${recent}] 扫描股票 ${selectedSymbol} 是否存在吞没或十字星等形态。`;
           setPriceAction(await callGeminiAPI(prompt, geminiKey, backendUrl));
           setIsScanning(false);
       } else if (type === 'audit') {
@@ -316,7 +327,7 @@ const StockDashboard = () => {
           setIsAuditing(false);
       } else if (type === 'news') {
           setIsSummarizing(true);
-          prompt = `提炼 ${selectedSymbol} 的市场舆情偏向。`;
+          prompt = `总结 ${selectedSymbol} 最近的市场情绪。`;
           setNewsSentiment(await callGeminiAPI(prompt, geminiKey, backendUrl));
           setIsSummarizing(false);
       }
@@ -337,12 +348,12 @@ const StockDashboard = () => {
       <aside className={`w-72 border-r flex flex-col transition-all ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200 shadow-xl'}`}>
         <div className="p-8 border-b border-inherit">
             <div className="flex items-center gap-4 group">
-                <div className="p-3 bg-blue-600 rounded-2xl shadow-xl shadow-blue-500/30">
+                <div className="p-3 bg-blue-600 rounded-2xl shadow-xl shadow-blue-500/30 group-hover:rotate-12 transition-transform">
                     <Activity className="w-6 h-6 text-white"/>
                 </div>
                 <div>
                     <h1 className="text-2xl font-black tracking-tighter italic">TradeFlow</h1>
-                    <p className="text-[10px] opacity-40 font-mono">QUANTUM ENGINE V14.9</p>
+                    <p className="text-[10px] opacity-40 font-mono">QUANTUM ENGINE V15.0</p>
                 </div>
             </div>
         </div>
@@ -374,7 +385,7 @@ const StockDashboard = () => {
 
         <div className="p-6 border-t border-inherit space-y-4">
             <button onClick={()=>setIsRealTime(!isRealTime)} className={`w-full p-4 rounded-2xl flex items-center justify-between text-xs font-black border transition-all ${isRealTime ? 'bg-green-500/10 border-green-500 text-green-500 shadow-lg' : 'bg-slate-800 border-slate-700 text-slate-500'}`}>
-                <div className="flex items-center gap-2">{isRealTime ? <Wifi className="w-4 h-4"/> : <WifiOff className="w-4 h-4"/>}<span>{isRealTime ? '实盘连接中' : '离线演示模式'}</span></div>
+                <div className="flex items-center gap-2">{isRealTime ? <Wifi className="w-4 h-4"/> : <WifiOff className="w-4 h-4"/>}<span>{isRealTime ? '实盘连接中' : '切换实盘数据'}</span></div>
                 {isRealTime && <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse shadow-[0_0_10px_#10b981]"/>}
             </button>
             <div className="flex gap-2">
@@ -443,7 +454,7 @@ const StockDashboard = () => {
 
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
                         <MetricCard label="短线建议" value="适当减仓" color="text-emerald-500" icon={Zap} isDarkMode={isDarkMode}/>
-                        <MetricCard label="趋势强度" value={currentStock.longTermTrend?.label || '强空'} color="text-blue-500" icon={TrendingUp} isDarkMode={isDarkMode}/>
+                        <MetricCard label="中长期趋势" value={currentStock.longTermTrend?.label || '强空'} color="text-blue-500" icon={TrendingUp} isDarkMode={isDarkMode}/>
                         <MetricCard label="预计压力" value={`$${currentStock.targetPrice}`} color="text-rose-500" icon={Target} isDarkMode={isDarkMode}/>
                         <MetricCard label="动态止损" value={`$${currentStock.stopLoss}`} color="text-amber-500" icon={ShieldAlert} isDarkMode={isDarkMode}/>
                     </div>
@@ -456,7 +467,7 @@ const StockDashboard = () => {
                         ))}
                     </div>
 
-                    <div className="flex-1 space-y-8 overflow-y-auto scrollbar-hide pb-20">
+                    <div className="flex-1 space-y-8 overflow-y-auto scrollbar-hide">
                         {activeTab === 'analysis' && (
                             <div className="space-y-8 animate-in fade-in duration-500">
                                 <div className={`p-8 rounded-[40px] border relative overflow-hidden flex flex-col min-h-[380px] shadow-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-xl'}`}>
@@ -466,11 +477,11 @@ const StockDashboard = () => {
                                             {isAiLoading ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4"/>} 一键生成
                                         </button>
                                     </div>
-                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap relative z-10 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{aiReport || "💡 请先在左下角设置中填入有效的 Gemini API Key。"}</div>
+                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap relative z-10 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{aiReport || "💡 系统正在尝试多版本轮询。请确保设置中的 API Key 输入正确。"}</div>
                                 </div>
                                 <div className={`p-8 rounded-[35px] border flex flex-col gap-5 transition-all ${isDarkMode ? 'bg-teal-900/10 border-teal-800/40' : 'bg-teal-50 border-teal-100'}`}>
                                     <div className="flex items-center justify-between"><div className="flex items-center gap-3 text-teal-500"><Search className="w-6 h-6"/><span className="text-xs font-black uppercase">裸K形态扫描</span></div><button onClick={()=>handleAI('scan')} disabled={isScanning} className="bg-teal-600 px-4 py-2 rounded-full text-[10px] font-bold text-white disabled:opacity-50 transition-all active:scale-95">执行扫描</button></div>
-                                    <p className={`text-xs font-medium leading-relaxed ${isDarkMode ? 'text-teal-200' : 'text-teal-900'}`}>{priceAction || "等待扫描..."}</p>
+                                    <p className={`text-xs font-medium leading-relaxed ${isDarkMode ? 'text-teal-200' : 'text-teal-900'}`}>{priceAction || "等待扫描信号..."}</p>
                                 </div>
                             </div>
                         )}
