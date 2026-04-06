@@ -2,43 +2,39 @@ export default async function handler(req, res) {
     if (req.method !== 'POST') return res.status(405).end();
     const { prompt, key } = req.body;
 
-    // 💡 智能模型备用池：按优先级自动降级尝试
-    const models = [
-        "gemini-2.0-flash",         // 优先级1：最新主力模型
-        "gemini-1.5-pro-latest",    // 优先级2：1.5 增强版
-        "gemini-1.5-flash",         // 优先级3：基础版
-        "gemini-pro"                // 优先级4：最基础、100%兼容的初代模型
+    // 💡 终极寻路池：覆盖所有版本和模型组合，只要 Key 是活的，总有一个能通！
+    const endpoints = [
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`,
+        `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${key}`,
+        `https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent?key=${key}`
     ];
 
-    let lastErrorMsg = "";
+    let lastError = "";
 
-    for (const model of models) {
+    for (const url of endpoints) {
         try {
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
             const response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
             });
-
+            
             const data = await response.json();
 
-            // 如果请求成功，提取文字并立刻返回前端，中断循环
+            // 成功：立刻返回文本，中断循环
             if (response.ok && data.candidates) {
-                const text = data.candidates[0].content.parts[0].text;
-                return res.status(200).json({ text });
+                return res.status(200).json({ text: data.candidates[0].content.parts[0].text });
             }
 
-            // 记录当前模型的报错信息，继续尝试下一个模型
+            // 失败：记录真实的报错原因，继续尝试下一条路
             if (data.error) {
-                lastErrorMsg = data.error.message;
+                lastError = data.error.message;
             }
-
         } catch (error) {
-            lastErrorMsg = error.message;
+            lastError = error.message;
         }
     }
 
-    // 如果把上面 4 个模型全试了一遍都不行，再给前端报错
-    res.status(400).json({ error: `尝试了所有可用模型均被拒绝。请检查 Key 权限。最后报错: ${lastErrorMsg}` });
+    // 所有路径全部阵亡，把最后的遗言发给前端
+    res.status(400).json({ error: lastError });
 }
