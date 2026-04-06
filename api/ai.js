@@ -4,9 +4,10 @@ export default async function handler(req, res) {
 
     // 💡 智能模型备用池：按优先级自动降级尝试
     const models = [
-        "gemini-2.0-flash",         // 优先级1：当前最新主打模型
-        "gemini-1.5-flash-latest",  // 优先级2：带 latest 后缀的稳定版
-        "gemini-pro"                // 优先级3：最基础、100%兼容的初代模型
+        "gemini-2.0-flash",         // 优先级1：最新主力模型
+        "gemini-1.5-pro-latest",    // 优先级2：1.5 增强版
+        "gemini-1.5-flash",         // 优先级3：基础版
+        "gemini-pro"                // 优先级4：最基础、100%兼容的初代模型
     ];
 
     let lastErrorMsg = "";
@@ -22,26 +23,22 @@ export default async function handler(req, res) {
 
             const data = await response.json();
 
-            // 如果请求成功，提取文字并立刻返回，中断循环
+            // 如果请求成功，提取文字并立刻返回前端，中断循环
             if (response.ok && data.candidates) {
                 const text = data.candidates[0].content.parts[0].text;
                 return res.status(200).json({ text });
             }
 
-            // 如果报错是 404 (模型找不到)，记录错误并继续尝试下一个模型
-            if (response.status === 404) {
-                lastErrorMsg = data.error?.message;
-                continue; 
+            // 记录当前模型的报错信息，继续尝试下一个模型
+            if (data.error) {
+                lastErrorMsg = data.error.message;
             }
-
-            // 如果是其他致命错误 (如 403 Key无权限，429 限流)，直接向前端抛出
-            return res.status(400).json({ error: `[${model}] 官方报错: ${data.error?.message || response.statusText}` });
 
         } catch (error) {
             lastErrorMsg = error.message;
         }
     }
 
-    // 如果所有模型都轮询完了还是失败
-    res.status(400).json({ error: `尝试了所有模型均告失败。最后报错: ${lastErrorMsg}` });
+    // 如果把上面 4 个模型全试了一遍都不行，再给前端报错
+    res.status(400).json({ error: `尝试了所有可用模型均被拒绝。请检查 Key 权限。最后报错: ${lastErrorMsg}` });
 }
