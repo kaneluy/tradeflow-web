@@ -85,7 +85,7 @@ class ErrorBoundary extends React.Component {
 // ==========================================
 
 /**
- * 🛠️ 智能 AI 通信引擎 (V15.2 真实错误穿透版)
+ * 🛠️ 智能 AI 通信引擎 (V15.3 真实错误穿透版)
  */
 const callGeminiAPI = async (prompt, userKey, backendUrl = "") => {
   const cleanKey = (userKey || "").trim();
@@ -94,10 +94,9 @@ const callGeminiAPI = async (prompt, userKey, backendUrl = "") => {
   const payload = { contents: [{ parts: [{ text: prompt }] }] };
   let directError = null;
 
-  // 策略 A：强制直连测试（能抓到 100% 真实的 Google 报错）
+  // 策略 A：强制直连测试（能抓到 100% 真实的 Google 报错，采用兼容性最强的 1.5-flash）
   try {
-    // 使用最先进的 2.0-flash 模型
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${cleanKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${cleanKey}`;
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -110,7 +109,7 @@ const callGeminiAPI = async (prompt, userKey, backendUrl = "") => {
       return data.candidates[0].content.parts[0].text;
     } else if (data?.error?.message) {
       // 🎉 我们抓到了真实的报错！
-      return `⚠️ Google API 明确拒绝了您的请求:\n\n"${data.error.message}"\n\n📌 诊断建议：\n1. 请检查 Key 是否带有多余的空格或隐形字符。\n2. 如果是刚申请的 Key，请等待几分钟再生效。\n3. 该 Key 所在的 Google 账号可能没有开通访问权限。`;
+      return `⚠️ Google API 拒绝了请求:\n\n[官方报错]: ${data.error.message}\n\n📌 诊断：请根据上方英文报错排查 API Key 权限或重试。`;
     }
   } catch (e) {
     // 直连抛出异常，说明被本地防火墙拦截了
@@ -132,19 +131,19 @@ const callGeminiAPI = async (prompt, userKey, backendUrl = "") => {
     const data = await res.json().catch(() => ({}));
 
     if (res.ok) {
-      // 拦截掉旧代理文件的“废话”报错，暴露出真正的问题
       if (data.text === "AI 响应异常" || data.text === "AI 引擎无响应") {
-         return `⚠️ 您的 Vercel 云端代理已接通，但 Google API 认为此 Key 无效。\n\n📌 诊断建议：\n1. 您的 API Key (${cleanKey.substring(0, 6)}...) 100% 存在权限问题或未激活。\n2. 建议在 Google AI Studio 中删除旧 Key，重新生成一个全新的，然后回到系统设置中重新填入。`;
+         return `⚠️ Vercel 云端代理已接通，但 Key 鉴权失败。\n请确认 Key 无误且可用。`;
       }
       return data.text || "AI 返回为空";
     } else {
-      return `⚠️ 代理服务器返回错误: ${data.error || res.statusText}`;
+      // 捕获新版 api/ai.js 透传的 Google 报错
+      return `⚠️ 代理拦截到的 Google 报错:\n\n[官方原因]: ${data.error || res.statusText}\n\n📌 建议：如果是 API key not valid，请去 Google AI Studio 重新生成。`;
     }
   } catch (e) {
     console.warn("云端代理也不可用");
   }
 
-  return `🚫 连接全面受阻。\n直连拦截原因: ${directError}\n\n请尝试开启全局梯子 (VPN) 后再试。`;
+  return `🚫 连接全面受阻。\n直连拦截原因: ${directError}\n云端代理也不可用。`;
 };
 
 const calculateIndicators = (data) => {
@@ -354,7 +353,7 @@ const StockDashboard = () => {
                 </div>
                 <div>
                     <h1 className="text-2xl font-black tracking-tighter italic">TradeFlow</h1>
-                    <p className="text-[10px] opacity-40 font-mono">QUANTUM ENGINE V15.2</p>
+                    <p className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full mt-1 border border-emerald-500/20 w-fit">V15.3 终极透传版</p>
                 </div>
             </div>
         </div>
@@ -478,11 +477,11 @@ const StockDashboard = () => {
                                             {isAiLoading ? <Loader2 className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4"/>} 一键生成
                                         </button>
                                     </div>
-                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap relative z-10 ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{aiReport || "💡 点击生成获取大白话操作建议。如果报错，您将能看到 Google 给出的最真实拦截原因。"}</div>
+                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap relative z-10 ${aiReport.includes('⚠️') ? 'text-rose-400 font-bold' : (isDarkMode ? 'text-slate-300' : 'text-slate-600')}`}>{aiReport || "💡 点击生成获取操作建议。如果出现报错，V15.3 将为您直接抓取 Google 官方拦截原因。"}</div>
                                 </div>
                                 <div className={`p-8 rounded-[35px] border flex flex-col gap-5 transition-all ${isDarkMode ? 'bg-teal-900/10 border-teal-800/40' : 'bg-teal-50 border-teal-100'}`}>
                                     <div className="flex items-center justify-between"><div className="flex items-center gap-3 text-teal-500"><Search className="w-6 h-6"/><span className="text-xs font-black uppercase">裸K形态扫描</span></div><button onClick={()=>handleAI('scan')} disabled={isScanning} className="bg-teal-600 px-4 py-2 rounded-full text-[10px] font-bold text-white disabled:opacity-50 transition-all active:scale-95">执行扫描</button></div>
-                                    <p className={`text-xs font-medium leading-relaxed ${isDarkMode ? 'text-teal-200' : 'text-teal-900'}`}>{priceAction || "等待扫描信号..."}</p>
+                                    <p className={`text-xs font-medium leading-relaxed ${priceAction.includes('⚠️') ? 'text-rose-400' : (isDarkMode ? 'text-teal-200' : 'text-teal-900')}`}>{priceAction || "等待扫描信号..."}</p>
                                 </div>
                             </div>
                         )}
@@ -491,7 +490,7 @@ const StockDashboard = () => {
                             <div className="space-y-6 animate-in fade-in duration-500">
                                 <div className={`p-8 rounded-[40px] border flex flex-col min-h-[350px] shadow-2xl ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white shadow-xl'}`}>
                                     <div className="flex justify-between items-center mb-8"><div className="flex items-center gap-3 text-amber-500"><Scale className="w-6 h-6"/><h3 className="text-xl font-black tracking-tighter">深度基本面审计</h3></div><button onClick={()=>handleAI('audit')} disabled={isAuditing} className="bg-amber-600 text-white px-5 py-2 rounded-full text-[10px] font-black disabled:opacity-50 active:scale-95 transition-all">价值诊断</button></div>
-                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>{fundamentalAudit || "让 AI 为您深度分析财务健康度。"}</div>
+                                    <div className={`flex-1 text-[13px] leading-relaxed whitespace-pre-wrap ${fundamentalAudit.includes('⚠️') ? 'text-rose-400' : (isDarkMode ? 'text-slate-300' : 'text-slate-600')}`}>{fundamentalAudit || "让 AI 为您深度分析财务健康度。"}</div>
                                 </div>
                                 <div className="grid grid-cols-2 gap-4">
                                     <FundamentalItem label="总市值" value={currentStock.cap} isDarkMode={isDarkMode}/>
@@ -506,7 +505,7 @@ const StockDashboard = () => {
                             <div className="space-y-8 animate-in fade-in duration-500 pb-20">
                                 <div className={`p-8 rounded-[40px] border flex flex-col min-h-[200px] ${isDarkMode ? 'bg-blue-900/10 border-blue-800/40' : 'bg-blue-50 border-blue-100'}`}>
                                     <div className="flex justify-between items-center mb-8"><div className="flex items-center gap-3 text-blue-500"><Newspaper className="w-6 h-6"/><h3 className="text-xl font-black tracking-tighter">舆情情绪提炼</h3></div><button onClick={()=>handleAI('news')} disabled={isSummarizing} className="bg-blue-600 text-white px-5 py-2 rounded-full text-[10px] font-black disabled:opacity-50 active:scale-95 transition-all">一键总结</button></div>
-                                    <div className={`text-xs font-medium leading-relaxed ${isDarkMode ? 'text-blue-100' : 'text-blue-900'}`}>{newsSentiment || "快速提炼市场核心情绪。"}</div>
+                                    <div className={`text-xs font-medium leading-relaxed ${newsSentiment.includes('⚠️') ? 'text-rose-400' : (isDarkMode ? 'text-blue-100' : 'text-blue-900')}`}>{newsSentiment || "快速提炼市场核心情绪。"}</div>
                                 </div>
                                 <div className="space-y-4">
                                     {[{ title: "季度交付数据超预期，市场信心回升", source: "REUTERS", time: "1h前" }, { title: "分析师看好其自动驾驶领先地位", source: "CNBC", time: "3h前" }].map((n, i) => (
